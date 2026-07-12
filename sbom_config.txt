@@ -1,0 +1,58 @@
+# ==============================================================================
+# SBOM DocumentRoot & NTIA/CISA Minimum Elements Configuration File
+# 形式は「キー: 値」です。#で始まる行はコメントとして無視されます。
+# ==============================================================================
+
+# 共通
+# ソフトウェアの正式名称
+# DocumentRoot/name & RootPackage/name
+product_name: SBOMcraft
+
+# ==============================================================================
+# SBOM DocumentRoot
+# ==============================================================================
+
+# [CISA] SBOMドキュメントの作成者 (ツールを実行している主体)
+# creators
+# true："Person: + document_creator"
+# false:"Organization:" + document_creator
+document_creator_is_person: true 
+document_creator:  XZ Manj
+
+# [CISA] データの機密性 / 共有範囲などのメタデータ表記 (任意)
+data_confidentiality: TLP:CLEAR
+
+# ==============================================================================
+# RootPackage
+# ==============================================================================
+
+# ソフトウェアのサプライヤーが個人開発者の場合は true、組織・企業の場合は false
+# creators, RootPackage/supplier
+# true："Person: + supplier_name"
+# false:"Organization:" + supplier_name
+is_person: true
+
+# ソフトウェアの作成者 / サプライヤー名 (組織名、または個人名)
+supplier_name: XZ Manj
+supplier_email: 
+
+
+# 自作コード（RootPackage）用のライセンスと著作権
+# 社内ツールなら Proprietary（商用/非公開）、オープンソースなら MIT や Apache-2.0 など
+root_license_declared: MIT
+root_copyright_text: Copyright (c) 2026 XZ Manj. All rights reserved.
+
+# 自作コード（RootPackage）のダウンロードURL（社内GitLabやGitHubなど）
+# 公開していない場合は、SPDX規格に基づき NOASSERTION のままでも構いません
+root_download_location: https://github.com/Atsumitsu/SBOMcraft
+
+# 対象とするバイナリファイルのパス（相対パスまたは絶対パス）
+# 指定がない、またはファイルが存在しない場合は自動的にハッシュ値の出力をスキップします
+root_binary_path: ..\SBOMcraft\dist\SBOMcraft\SBOMcraft.exe
+
+# 自作ツールのPURL（チェッカー対策）
+root_purl: pkg:generic/SBOMcraft@5.2.0.0
+
+# [CISA 2025対応] SBOMの生成コンテキスト (Generation Context)
+# 一般的な値: Source (ソーススキャン), Build (ビルド時生成), Deployed (デプロイ環境スキャン)
+generation_context: Deployed
