@@ -16,17 +16,15 @@ A lightweight Python SBOM generator fully compliant with NTIA minimum elements, 
 ## Usage (使い方)
 
 1. 本リポジトリをクローンします:
-   ```bash
-   git clone [https://github.com/あなたのユーザー名/py-sbom-mini.git](https://github.com/あなたのユーザー名/py-sbom-mini.git)
+```
+      git clone [https://github.com/あなたのユーザー名/py-sbom-mini.git](https://github.com/あなたのユーザー名/py-sbom-mini.git)
    cd py-sbom-mini
-
 ```
 
 2. `sbom_config.txt` を作成または編集し、プロジェクトのプロファイルを記述します（詳細は後述）。
 3. 解析対象のPythonプロジェクトのパスを指定して実行します:
-```bash
+```
 python main.py --path /path/to/your/python/project --depth all
-
 ```
 
 
