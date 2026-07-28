@@ -13,6 +13,7 @@ import subprocess
 import uuid
 import hashlib
 from datetime import datetime, timezone
+import importlib.metadata 
 
 PACKAGE_MAPPING = {
     "yaml": "PyYAML",
@@ -127,6 +128,7 @@ def find_all_py_files(base_path, patterns):
         for file in files:
             if file.endswith(".py") and file != "main.py":
                 full_path = os.path.join(root, file)
+                print(f"file:{full_path}")
                 if not is_ignored(full_path, patterns, base_path): py_files.append(full_path)
     return py_files
 
@@ -137,13 +139,31 @@ def get_imports_from_file(filepath):
     modules = set()
     for node in ast.walk(root):
         if isinstance(node, ast.Import):
-            for n in node.names: modules.add(n.name.split('.')[0])
+            for n in node.names:
+                modules.add(n.name.split('.')[0])
+                print(f"import:{n.name.split('.')[0]}")
         elif isinstance(node, ast.ImportFrom):
-            if node.level == 0 and node.module: modules.add(node.module.split('.')[0])
+            if node.level == 0 and node.module:
+                modules.add(node.module.split('.')[0])
+                print(f"import2:{node.module.split('.')[0]}")
     return modules
 
 def get_pip_show_info(package_name, base_path):
+    # 1. 🌟 まず importlib.metadata を使って、モジュール名から正式なパッケージ名への逆引きを試みる
     pip_package_name = PACKAGE_MAPPING.get(package_name, package_name)
+    
+    if pip_package_name == package_name:
+        try:
+            # 環境内の全パッケージを走査して、提供しているモジュール(packages_distributions)を逆引き
+            # 例: "yaml" から "PyYAML" を見つけ出す
+            mapping = importlib.metadata.packages_distributions()
+            if package_name in mapping:
+                # 最初にマッチした正式なパッケージ名を採用
+                pip_package_name = mapping[package_name][0]
+        except Exception:
+            pass # 逆引きに失敗した場合は元の名前で続行
+
+    # 以降の処理は元のロジックを維持
     venv_python = sys.executable
     possible_venv_paths = [
         os.path.join(base_path, ".venv", "Scripts", "python.exe"),
@@ -156,6 +176,7 @@ def get_pip_show_info(package_name, base_path):
             venv_python = vp
             break
     try:
+        # 🌟 正式なパッケージ名（pip_package_name）で pip show を実行する
         result = subprocess.run([venv_python, "-m", "pip", "show", pip_package_name], capture_output=True, text=True, encoding="utf-8", errors="ignore")
         if result.returncode != 0: return None
         info = {}
