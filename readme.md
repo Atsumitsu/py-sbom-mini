@@ -69,8 +69,8 @@ is_person: false
 product_name: My-Application
 document_creator: Security Team
 data_confidentiality: TLP:CLEAR
-root_license_declared: Apache-2.0
-root_copyright_text: Copyright (c) 2026 XZ Manj.
+root_license_declared: your license
+root_copyright_text: Copyright (c) year your name
 root_download_location: [https://github.com/your-org/my-app](https://github.com/your-org/my-app)
 generation_context: Source
 
@@ -79,3 +79,7 @@ generation_context: Source
 ## License
 
 SPDX-License-Identifier: Apache-2.0
+
+## version
+2026/7/11 ver 1.0
+2026/7/29 ver 1.1 importlib対応
