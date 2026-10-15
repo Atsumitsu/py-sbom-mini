@@ -12,6 +12,7 @@ import argparse
 import subprocess
 import uuid
 import hashlib
+import re
 from datetime import datetime, timezone
 import importlib.metadata 
 
@@ -40,15 +41,16 @@ def load_tag_value_config(config_path):
     config = {
         "supplier_name": "UNKNOWN-SUPPLIER",
         "supplier_email": "contact@example.com",
-        "is_person": "false",            # 👈 追記（デフォルトは組織想定のfalse）        "product_name": "Python-Project",
+        "is_person": "false",
+        "product_name": "Python-Project",
         "document_creator": "Security-Team",
         "data_confidentiality": "TLP:CLEAR",
         "root_license_declared": "NOASSERTION",
         "root_copyright_text": "NOASSERTION",
         "root_download_location": "NOASSERTION",
-        "root_binary_path": "", # 👈 追加
-        "root_purl": "",         # 👈 追加
-        "generation_context": "Source"  # 👈 追記（デフォルトはSource）
+        "root_binary_path": "",
+        "root_purl": "",
+        "generation_context": "Source"
     }
     
     if not os.path.exists(config_path):
@@ -61,15 +63,15 @@ def load_tag_value_config(config_path):
             if not line or line.startswith("#"):
                 continue
             
-            # 🌟 最初のコロンの位置で安全に2分割するロジックに改良
             if ":" in line:
                 idx = line.find(":")
                 key = line[:idx].strip()
                 val = line[idx+1:].strip()
                 config[key] = val
     return config
+
 def calculate_sha256(file_path):
-    """ 🌟 指定されたバイナリファイルのSHA-256ハッシュ値を計算する """
+    """ 指定されたバイナリファイルのSHA-256ハッシュ値を計算する """
     if not os.path.exists(file_path):
         return None
     sha256_hash = hashlib.sha256()
@@ -99,7 +101,49 @@ def get_package_hash_from_record(location, name):
                 return calculate_sha256(record_path)
     return None
 
-# --- (中略: load_gitignore, is_ignored, find_all_py_files, get_imports_from_file は維持) ---
+def extract_copyright_from_dist_info(location, pkg_name):
+    """
+    .dist-info 配下の LICENSE, NOTICE, METADATA 等から Copyright 表記を抽出する
+    """
+    if not location or not os.path.exists(location):
+        return "NOASSERTION"
+    
+    normalized_name = pkg_name.replace("-", "_").lower()
+    dist_info_path = None
+    
+    for entry in os.listdir(location):
+        if entry.lower().startswith(normalized_name) and entry.endswith(".dist-info"):
+            dist_info_path = os.path.join(location, entry)
+            break
+            
+    if not dist_info_path:
+        return "NOASSERTION"
+
+    copyright_lines = []
+    # 検索対象ファイル
+    target_files = [f for f in os.listdir(dist_info_path) if f.upper().startswith(("LICENSE", "NOTICE", "COPYRIGHT")) or f == "METADATA"]
+
+    # 正規表現パターン (Copyright, (C), © 表記を検出)
+    copyright_pattern = re.compile(r'(copyright\s+(\(c\)\s*|©\s*)?[\d\-\s,]+[^\n]+)', re.IGNORECASE)
+
+    for file_name in target_files:
+        file_path = os.path.join(dist_info_path, file_name)
+        if os.path.isfile(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        match = copyright_pattern.search(line)
+                        if match:
+                            clean_text = match.group(1).strip()
+                            if clean_text not in copyright_lines:
+                                copyright_lines.append(clean_text)
+            except Exception:
+                pass
+
+    if copyright_lines:
+        return "\n".join(copyright_lines)
+    
+    return "NOASSERTION"
 
 def load_gitignore_patterns(base_path):
     patterns = ['.git/', '.venv/', 'venv/', '__pycache__/', '*.pyc']
@@ -149,21 +193,33 @@ def get_imports_from_file(filepath):
     return modules
 
 def get_pip_show_info(package_name, base_path):
-    # 1. 🌟 まず importlib.metadata を使って、モジュール名から正式なパッケージ名への逆引きを試みる
+    # 🌟 1. 対象プロジェクトの .venv / venv 内の site-packages パスを特定する
+    target_site_packages = None
+    possible_site_paths = [
+        os.path.join(base_path, ".venv", "Lib", "site-packages"),      # Windows
+        os.path.join(base_path, "venv", "Lib", "site-packages"),       # Windows
+        os.path.join(base_path, ".venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"), # Linux/Mac
+        os.path.join(base_path, "venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),  # Linux/Mac
+    ]
+    for sp in possible_site_paths:
+        if os.path.exists(sp):
+            target_site_packages = sp
+            break
+
+    # 🌟 2. 対象の site-packages を指定してモジュール名からパッケージ名を逆引き
     pip_package_name = PACKAGE_MAPPING.get(package_name, package_name)
     
     if pip_package_name == package_name:
         try:
-            # 環境内の全パッケージを走査して、提供しているモジュール(packages_distributions)を逆引き
-            # 例: "yaml" から "PyYAML" を見つけ出す
-            mapping = importlib.metadata.packages_distributions()
+            # 対象の .venv 内の site-packages を優先的に探索パスに指定
+            search_path = [target_site_packages] if target_site_packages else None
+            mapping = importlib.metadata.packages_distributions(path=search_path)
             if package_name in mapping:
-                # 最初にマッチした正式なパッケージ名を採用
                 pip_package_name = mapping[package_name][0]
         except Exception:
-            pass # 逆引きに失敗した場合は元の名前で続行
+            pass
 
-    # 以降の処理は元のロジックを維持
+    # 🌟 3. 対象プロジェクトの .venv 内の python executable を探索
     venv_python = sys.executable
     possible_venv_paths = [
         os.path.join(base_path, ".venv", "Scripts", "python.exe"),
@@ -175,18 +231,28 @@ def get_pip_show_info(package_name, base_path):
         if os.path.exists(vp):
             venv_python = vp
             break
+
+    # 🌟 4. 特定した python.exe を使って pip show を実行
     try:
-        # 🌟 正式なパッケージ名（pip_package_name）で pip show を実行する
-        result = subprocess.run([venv_python, "-m", "pip", "show", pip_package_name], capture_output=True, text=True, encoding="utf-8", errors="ignore")
-        if result.returncode != 0: return None
+        result = subprocess.run(
+            [venv_python, "-m", "pip", "show", pip_package_name],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore"
+        )
+        if result.returncode != 0:
+            return None
+            
         info = {}
         for line in result.stdout.splitlines():
             if ":" in line:
                 key, val = line.split(":", 1)
                 info[key.strip()] = val.strip()
         return info
-    except Exception: return None
-
+    except Exception:
+        return None
+    
 def trace_dependencies_all(direct_modules, base_path):
     collected_packages = {}
     queue = list(direct_modules)
@@ -227,14 +293,14 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": cfg['product_name'],
-        "comment": comment_str, # 🌟 ドキュメント全体のメタデータとして埋め込み
+        "comment": comment_str,
         "creationInfo": {
             "created": now,
             "creators": [
             # ドキュメントの作成組織/作成者は規約通りそのまま配置
                 f"Organization: {cfg['document_creator']}" if not document_creator_is_person_flag else f"Person: {cfg['document_creator']}",
 #                f"Person: {cfg['document_creator']} (<{cfg['supplier_email']}>)",
-                "Tool: py-sbom-mini-1.0.0"
+                "Tool: py-sbom-mini-1.2.0"
             ]
         },
         "packages": [],
@@ -246,7 +312,7 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
         "name": cfg['product_name'],
         "SPDXID": "SPDXRef-RootPackage",
         "versionInfo": version,
-        "supplier": f"{my_supplier_prefix}: {cfg['supplier_name']}", # 👈 Person: または Organization: になる
+        "supplier": f"{my_supplier_prefix}: {cfg['supplier_name']}",
         "downloadLocation": cfg['root_download_location'],
         "filesAnalyzed": False,
         "licenseConcluded": cfg['root_license_declared'],
@@ -328,11 +394,14 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
                 # 最終フォールバックで自分の設定を使う場合も、個人/組織設定を反映
                 raw_author = cfg['supplier_name']
                 external_supplier_prefix = my_supplier_prefix
-        else:
-            # もしpip showのAuthorに個人名っぽいカンマや特定の個人名が含まれる場合の
-            # 厳密な判定も可能ですが、基本はOrganization、空の時の最終防衛ラインを自分の設定に合わせます
-            pass
+
+        # 🌟 Copyright 情報の探索・決定ロジック
+        copyright_text = extract_copyright_from_dist_info(pkg.get("Location"), pkg["Name"])
         
+        # .dist-info から取得できず、Author 情報が存在する場合は「Copyright (c) <Author>」形式でフォールバック
+        if copyright_text == "NOASSERTION" and raw_author and raw_author != cfg['supplier_name']:
+            copyright_text = f"Copyright (c) {raw_author}"
+
         safe_pkg_id = f"SPDXRef-Package-{pkg['Name'].replace('_', '-')}"
 
         pkg_node = {
@@ -345,7 +414,7 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
             "filesAnalyzed": False,
             "licenseConcluded": license_declared,
             "licenseDeclared": license_declared,
-            "copyrightText": "NOASSERTION",
+            "copyrightText": copyright_text,  # 👈 動的抽出/補完結果を設定
             "summary": pkg.get("Summary", ""),
             "homepage": pkg.get("Home-page", "NOASSERTION"),
             "externalRefs": [

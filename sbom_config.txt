@@ -39,7 +39,7 @@ supplier_email:
 
 # 自作コード（RootPackage）用のライセンスと著作権
 # 社内ツールなら Proprietary（商用/非公開）、オープンソースなら MIT や Apache-2.0 など
-root_license_declared: MIT
+root_license_declared: Apache-2.0
 root_copyright_text: Copyright (c) 2026 XZ Manj. All rights reserved.
 
 # 自作コード（RootPackage）のダウンロードURL（社内GitLabやGitHubなど）
@@ -51,7 +51,7 @@ root_download_location: https://github.com/Atsumitsu/SBOMcraft
 root_binary_path: ..\SBOMcraft\dist\SBOMcraft\SBOMcraft.exe
 
 # 自作ツールのPURL（チェッカー対策）
-root_purl: pkg:generic/SBOMcraft@5.2.0.0
+root_purl: pkg:generic/SBOMcraft@0.6.3.0
 
 # [CISA 2025対応] SBOMの生成コンテキスト (Generation Context)
 # 一般的な値: Source (ソーススキャン), Build (ビルド時生成), Deployed (デプロイ環境スキャン)
