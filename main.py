@@ -36,6 +36,24 @@ def parse_arguments():
     parser.add_argument("-b", "--binary", default=None, help="RootPackage対象のバイナリファイルパス")
     return parser.parse_args()
 
+def setup_target_environment(target_path):
+    """
+    対象プロジェクトの .venv / venv 内の site-packages を sys.path に動的追加する
+    """
+    possible_site_paths = [
+        os.path.join(target_path, ".venv", "Lib", "site-packages"),      # Windows
+        os.path.join(target_path, "venv", "Lib", "site-packages"),       # Windows
+        os.path.join(target_path, ".venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"), # Linux/Mac
+        os.path.join(target_path, "venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),  # Linux/Mac
+    ]
+    for sp in possible_site_paths:
+        if os.path.exists(sp):
+            if sp not in sys.path:
+                sys.path.insert(0, sp)
+            print(f"   [仮想環境検出] site-packages を認識しました: {sp}")
+            return sp
+    return None
+
 def load_tag_value_config(config_path):
     """ tag:value 形式の外部ファイルを読み込んで辞書にする """
     config = {
@@ -193,27 +211,11 @@ def get_imports_from_file(filepath):
     return modules
 
 def get_pip_show_info(package_name, base_path):
-    # 🌟 1. 対象プロジェクトの .venv / venv 内の site-packages パスを特定する
-    target_site_packages = None
-    possible_site_paths = [
-        os.path.join(base_path, ".venv", "Lib", "site-packages"),      # Windows
-        os.path.join(base_path, "venv", "Lib", "site-packages"),       # Windows
-        os.path.join(base_path, ".venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"), # Linux/Mac
-        os.path.join(base_path, "venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),  # Linux/Mac
-    ]
-    for sp in possible_site_paths:
-        if os.path.exists(sp):
-            target_site_packages = sp
-            break
-
-    # 🌟 2. 対象の site-packages を指定してモジュール名からパッケージ名を逆引き
     pip_package_name = PACKAGE_MAPPING.get(package_name, package_name)
     
     if pip_package_name == package_name:
         try:
-            # 対象の .venv 内の site-packages を優先的に探索パスに指定
-            search_path = [target_site_packages] if target_site_packages else None
-            mapping = importlib.metadata.packages_distributions(path=search_path)
+            mapping = importlib.metadata.packages_distributions()
             if package_name in mapping:
                 pip_package_name = mapping[package_name][0]
         except Exception:
@@ -234,25 +236,16 @@ def get_pip_show_info(package_name, base_path):
 
     # 🌟 4. 特定した python.exe を使って pip show を実行
     try:
-        result = subprocess.run(
-            [venv_python, "-m", "pip", "show", pip_package_name],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore"
-        )
-        if result.returncode != 0:
-            return None
-            
+        result = subprocess.run([venv_python, "-m", "pip", "show", pip_package_name], capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        if result.returncode != 0: return None
         info = {}
         for line in result.stdout.splitlines():
             if ":" in line:
                 key, val = line.split(":", 1)
                 info[key.strip()] = val.strip()
         return info
-    except Exception:
-        return None
-    
+    except Exception: return None
+
 def trace_dependencies_all(direct_modules, base_path):
     collected_packages = {}
     queue = list(direct_modules)
@@ -299,8 +292,7 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
             "creators": [
             # ドキュメントの作成組織/作成者は規約通りそのまま配置
                 f"Organization: {cfg['document_creator']}" if not document_creator_is_person_flag else f"Person: {cfg['document_creator']}",
-#                f"Person: {cfg['document_creator']} (<{cfg['supplier_email']}>)",
-                "Tool: py-sbom-mini-1.2.0"
+                "Tool: py-sbom-mini-1.1.0"
             ]
         },
         "packages": [],
@@ -319,7 +311,7 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
         "licenseDeclared": cfg['root_license_declared'],
         "copyrightText": cfg['root_copyright_text'],
         "summary": "Root application container for the project",
-        "comment": f"Generation Context: {gen_ctx}" #  ルートコンポーネントの属性としても明記
+        "comment": f"Generation Context: {gen_ctx}"
     }
     
     # バイナリパスが設定されており、ファイルが存在すればSHA-256を計算して追加
@@ -384,7 +376,7 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
             license_declared = raw_license
 
         raw_author = pkg.get('Author', '').strip()
-        external_supplier_prefix = "Organization" # 外部ライブラリは基本的に組織/開発チーム想定
+        external_supplier_prefix = "Organization"
         
         if not raw_author:
             raw_email = pkg.get('Author-email', '').strip()
@@ -414,7 +406,7 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
             "filesAnalyzed": False,
             "licenseConcluded": license_declared,
             "licenseDeclared": license_declared,
-            "copyrightText": copyright_text,  # 👈 動的抽出/補完結果を設定
+            "copyrightText": copyright_text,
             "summary": pkg.get("Summary", ""),
             "homepage": pkg.get("Home-page", "NOASSERTION"),
             "externalRefs": [
@@ -462,6 +454,9 @@ def main():
     if not os.path.exists(target_path):
         print(f"❌ エラー: パスが見つかりません: {target_path}")
         sys.exit(1)
+
+    # 🌟 1つ目のやり方でも動作するように、対象の .venv の site-packages を先頭にセットする
+    setup_target_environment(target_path)
 
     cfg = load_tag_value_config(args.config)
 

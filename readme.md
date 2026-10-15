@@ -8,7 +8,8 @@ A lightweight Python SBOM generator fully compliant with NTIA minimum elements, 
 ## 特徴 (Features)
 
 - **自動インポート解析:** 指定されたソースディレクトリから標準ライブラリ以外の `import` 文を自動抽出。
-- **仮想環境 (.venv) 連動:** 仮想環境内を調査し、正確なパッケージバージョンとSHA-256ハッシュ値を自動算出。
+- **仮想環境 (.venv) 自動検出・連動:** 対象プロジェクト配下の `.venv` (または `venv`) 内の `site-packages` を自動認識し、スクリプトの実行環境を問わず正確なパッケージバージョン、モジュール名（`cyclonedx-python-lib` 等への自動逆引き）、SHA-256ハッシュ値を正確に取得。
+- **著作権 (Copyright) 情報自動判定:** インストール済みパッケージの `.dist-info` 内にあるライセンス/通知ファイル（`LICENSE`, `NOTICE`, `METADATA` 等）から `Copyright` 表記を正規表現で自動抽出。抽出できない場合も `Author` 情報からフォールバック生成し、`NOASSERTION` 回避率を向上。
 - **CISA 2025 対応:** 従来のツールでは不足しがちなライフサイクルコンテキスト情報（Generation Context）の埋め込みに対応。
 - **マルチOS対応:** Windows環境だけでなく、LinuxやMac環境でもそのまま動作可能。
 - **簡単管理:** 共通のメタデータは外部設定ファイルで一括管理し、作成の手間を大幅に削減。
@@ -81,3 +82,4 @@ SPDX-License-Identifier: Apache-2.0
 ## version
 2026/7/11 ver 1.0
 2026/7/29 ver 1.1 importlib対応
+2026/10/16 ver 1.2 著作権情報(.dist-info/Author)の自動解析・フォールバック対応、対象.venvの自動検出・参照機能の追加
