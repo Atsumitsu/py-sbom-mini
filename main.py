@@ -31,23 +31,28 @@ KNOWN_SPDX_IDS = {
     "MPL-2.0", "PSF-2.0", "Zlib", "Unlicense"
 }
 
-def normalize_and_register_license(raw_license, classifiers, pkg_name, custom_licenses_list):
+def normalize_and_register_license_with_source(pkg, pkg_name, custom_licenses_list):
     """
-    SPDXライセンス式（AND, OR, WITH, 括弧など）を考慮してライセンスを正規化・検証し、
-    必要に応じて個別の LicenseRef を自動生成して式を再構築する。
+    ライセンスの出所を追跡しながら、SPDXライセンス式をパース・正規化し、
+    (SPDX式, 取得元のソース情報) のタプルを返す。
     """
-    if not raw_license:
-        raw_license = "NOASSERTION"
+    raw_license = None
+    source_origin = "Unknown"
 
+    # 1. 優先度高: License-Expression (PEP 639 等)
+    if pkg.get("License-Expression"):
+        raw_license = pkg.get("License-Expression")
+        source_origin = "Metadata: License-Expression"
+    # 2. 従来型: License フィールド
+    elif pkg.get("License"):
+        raw_license = pkg.get("License")
+        source_origin = "Metadata: License Field"
+    
+    classifiers = pkg.get("Classifiers", [])
+    if isinstance(classifiers, str):
+        classifiers = [c.strip() for c in classifiers.split(",")]
 
-    cleaned = raw_license.strip()
-
-    # 1. すでにプレーンな SPDX ID または単純な形式の場合の事前チェック
-    # （全体のクレンジング）
-    if cleaned == "NOASSERTION" or not cleaned:
-        return "NOASSERTION"
-
-    # 2. Pythonの Classifier からの推論（単一ライセンスの場合のフォールバック用）
+    # Classifier からの推論用
     inferred_from_clf = None
     for clf in classifiers:
         if "License :: OSI Approved ::" in clf:
@@ -58,35 +63,30 @@ def normalize_and_register_license(raw_license, classifiers, pkg_name, custom_li
                 inferred_from_clf = "BSD-3-Clause" if "3" in clf_lower else "BSD-2-Clause"
                 break
 
-    # 3. 「AND」「OR」「WITH」などの演算子、または括弧が含まれているか判定
-    # 正規表現で論理演算子や括弧の周囲でトークンに分解しつつ、構造を保持して処理する
-    # 例: "MIT OR Apache-2.0" -> ["MIT", "OR", "Apache-2.0"]
-    # ここでは簡易的に、単語や記号に分解して個別に検証・置換アプローチをとる
-    
-    # 演算子やカッコ以外のトークン候補を抽出するためのパターン
-    # SPDX仕様の演算子 (AND, OR, WITH, WITH例外, 括弧)
+    if not raw_license or raw_license.strip() == "" or raw_license.strip().upper() == "UNKNOWN":
+        if inferred_from_clf:
+            return inferred_from_clf, "PyPI Classifiers (OSI Approved)"
+        return "NOASSERTION", "Fallback (NOASSERTION)"
+
+    cleaned = raw_license.strip()
+
+    # 演算子やカッコでトークン分解して個別に正規化（AND, OR, WITH対応）
     tokens = re.split(r'(\s+and\s+|\s+or\s+|\s+with\s+|\(|\))', cleaned, flags=re.IGNORECASE)
-    
     normalized_tokens = []
+    
     for token in tokens:
         stripped_token = token.strip()
         if not stripped_token:
             continue
-        
-        # 演算子や括弧はそのまま維持
         if re.match(r'^(and|or|with|\(|\))$', stripped_token, re.IGNORECASE):
             normalized_tokens.append(stripped_token.upper() if stripped_token.lower() in ['and', 'or', 'with'] else stripped_token)
             continue
             
-        # 個別のライセンス文字列の正規化・検証
         norm_sub = _normalize_single_license(stripped_token, inferred_from_clf, pkg_name, custom_licenses_list)
         normalized_tokens.append(norm_sub)
         
-    # トークンをスペースで結合して正しいSPDXライセンス式を復元
-    # 例: "MIT OR Apache-2.0"
     reconstructed_expression = " ".join(normalized_tokens)
-    return reconstructed_expression
-
+    return reconstructed_expression, source_origin
 
 def _normalize_single_license(single_str, inferred_clf, pkg_name, custom_licenses_list):
     """ 単一のライセンス文字列（式の中のパーツ）を正規化するヘルパー """
@@ -369,7 +369,7 @@ def trace_dependencies_all(direct_modules, base_path):
     return collected_packages
 
 
-def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg):
+def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg, verbose =False):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     doc_uuid = str(uuid.uuid4())
     
@@ -480,7 +480,15 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
             classifiers = [c.strip() for c in classifiers.split(",")]
 
         # ライセンスの正規化と LicenseRef の自動生成判定
-        license_declared = normalize_and_register_license(raw_license, classifiers, pkg["Name"], other_licenses_list)
+        license_declared,license_source = normalize_and_register_license_with_source(pkg, pkg["Name"], other_licenses_list)
+#        normalize_and_register_license(raw_license, classifiers, pkg["Name"], other_licenses_list)
+
+        # 🌟 詳細出力モードが有効な場合のログ表示
+        if verbose:
+            print(f"      [License Detail] Package: {pkg['Name']} (v{pkg.get('Version')})")
+            print(f"        -> 取得元ソース: {license_source}")
+            print(f"        -> 生データ表現: {pkg.get('License') or pkg.get('License-Expression', 'N/A')}")
+            print(f"        -> 確定 SPDX ID / Ref: {license_declared}")
 
         raw_author = pkg.get('Author', '').strip()
         external_supplier_prefix = "Organization"
@@ -611,7 +619,7 @@ def main():
                 print(f"   [検出] {info['Name']} (v{info['Version']})")
             
     print(f"\n5. SPDX形式のSBOMを生成中...")
-    sbom_data = generate_spdx_json(args.version, valid_packages, direct_package_names, args.depth, cfg)
+    sbom_data = generate_spdx_json(args.version, valid_packages, direct_package_names, args.depth, cfg,verbose=args.verbose)
     
     output_path = args.output
     with open(output_path, "w", encoding="utf-8") as f:
