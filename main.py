@@ -24,6 +24,106 @@ PACKAGE_MAPPING = {
     "bs4": "beautifulsoup4",
 }
 
+# 代表的な SPDX ライセンス ID のセット（必要に応じて拡張可能）
+KNOWN_SPDX_IDS = {
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC",
+    "GPL-2.0-only", "GPL-3.0-only", "LGPL-2.1-only", "LGPL-3.0-only",
+    "MPL-2.0", "PSF-2.0", "Zlib", "Unlicense"
+}
+
+def normalize_and_register_license(raw_license, classifiers, pkg_name, custom_licenses_list):
+    """
+    SPDXライセンス式（AND, OR, WITH, 括弧など）を考慮してライセンスを正規化・検証し、
+    必要に応じて個別の LicenseRef を自動生成して式を再構築する。
+    """
+    if not raw_license:
+        raw_license = "NOASSERTION"
+
+
+    cleaned = raw_license.strip()
+
+    # 1. すでにプレーンな SPDX ID または単純な形式の場合の事前チェック
+    # （全体のクレンジング）
+    if cleaned == "NOASSERTION" or not cleaned:
+        return "NOASSERTION"
+
+    # 2. Pythonの Classifier からの推論（単一ライセンスの場合のフォールバック用）
+    inferred_from_clf = None
+    for clf in classifiers:
+        if "License :: OSI Approved ::" in clf:
+            clf_lower = clf.lower()
+            if "mit license" in clf_lower: inferred_from_clf = "MIT"; break
+            elif "apache software license" in clf_lower or "apache-2.0" in clf_lower: inferred_from_clf = "Apache-2.0"; break
+            elif "bsd license" in clf_lower:
+                inferred_from_clf = "BSD-3-Clause" if "3" in clf_lower else "BSD-2-Clause"
+                break
+
+    # 3. 「AND」「OR」「WITH」などの演算子、または括弧が含まれているか判定
+    # 正規表現で論理演算子や括弧の周囲でトークンに分解しつつ、構造を保持して処理する
+    # 例: "MIT OR Apache-2.0" -> ["MIT", "OR", "Apache-2.0"]
+    # ここでは簡易的に、単語や記号に分解して個別に検証・置換アプローチをとる
+    
+    # 演算子やカッコ以外のトークン候補を抽出するためのパターン
+    # SPDX仕様の演算子 (AND, OR, WITH, WITH例外, 括弧)
+    tokens = re.split(r'(\s+and\s+|\s+or\s+|\s+with\s+|\(|\))', cleaned, flags=re.IGNORECASE)
+    
+    normalized_tokens = []
+    for token in tokens:
+        stripped_token = token.strip()
+        if not stripped_token:
+            continue
+        
+        # 演算子や括弧はそのまま維持
+        if re.match(r'^(and|or|with|\(|\))$', stripped_token, re.IGNORECASE):
+            normalized_tokens.append(stripped_token.upper() if stripped_token.lower() in ['and', 'or', 'with'] else stripped_token)
+            continue
+            
+        # 個別のライセンス文字列の正規化・検証
+        norm_sub = _normalize_single_license(stripped_token, inferred_from_clf, pkg_name, custom_licenses_list)
+        normalized_tokens.append(norm_sub)
+        
+    # トークンをスペースで結合して正しいSPDXライセンス式を復元
+    # 例: "MIT OR Apache-2.0"
+    reconstructed_expression = " ".join(normalized_tokens)
+    return reconstructed_expression
+
+
+def _normalize_single_license(single_str, inferred_clf, pkg_name, custom_licenses_list):
+    """ 単一のライセンス文字列（式の中のパーツ）を正規化するヘルパー """
+    lower_s = single_str.lower()
+    
+    if "apache" in lower_s and "2" in lower_s:
+        return "Apache-2.0"
+    if lower_s == "mit" or "mit license" in lower_s:
+        return "MIT"
+    if "bsd" in lower_s:
+        return "BSD-3-Clause" if "3" in lower_s else "BSD-2-Clause"
+    if "isc" in lower_s:
+        return "ISC"
+    #  ライセンス変換：救済
+    if "psfl" in lower_s:
+        return "PSF-2.0"
+        
+    if single_str in KNOWN_SPDX_IDS:
+        return single_str
+        
+    # もし部分一致で認識できず、全体として無名かつ Classifier から推論できるならそれを使う
+    if inferred_clf and (single_str == "NOASSERTION" or not single_str):
+        return inferred_clf
+
+    # どうしても未知の場合は、個別に LicenseRef を生成して登録
+    safe_name = re.sub(r'[^a-zA-Z0-9-]', '-', f"-{single_str}").lower()
+    license_ref = f"LicenseRef-{safe_name[:40]}" # 長くなりすぎないように制限
+    
+    if not any(item.get("licenseId") == license_ref for item in custom_licenses_list):
+        custom_licenses_list.append({
+            "licenseId": license_ref,
+            "extractedText": single_str,
+            "name": f"{single_str}"
+        })
+        
+    return license_ref
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="PythonプロジェクトからNTIA/CISA要件準拠のSPDX 2.3形式SBOMを自動生成するツール"
@@ -34,6 +134,7 @@ def parse_arguments():
     parser.add_argument("-d", "--depth", default="1", help="階層（'1' または 'all'）")
     parser.add_argument("-c", "--config", default="sbom_config.txt", help="設定ファイルのパス")
     parser.add_argument("-b", "--binary", default=None, help="RootPackage対象のバイナリファイルパス")
+    parser.add_argument("--verbose", action="store_true", help="詳細なライセンス解析プロセスとソースを出力する") # 🌟 追加
     return parser.parse_args()
 
 def setup_target_environment(target_path):
@@ -280,6 +381,9 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
     gen_ctx = cfg.get("generation_context", "Source")
     comment_str = f"Data Confidentiality: {cfg['data_confidentiality']} | Type: {gen_ctx} | Generation Context: {gen_ctx}"
     
+    # 🌟 カスタムライセンス（LicenseRef）を格納するリスト
+    other_licenses_list = []
+
     spdx_doc = {
         "documentNamespace": f"http://spdx.org/spdxdocs/{cfg['product_name']}-{version}-{doc_uuid}",
         "spdxVersion": "SPDX-2.3",
@@ -368,17 +472,20 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
     # 外部パッケージの追加
     for pkg_name, pkg in packages.items():
         raw_license = pkg.get("License-Expression") or pkg.get("License", "NOASSERTION")
-        if "apache" in raw_license.lower() and "apache-" not in raw_license.lower():
-            license_declared = "Apache-2.0"
-        elif raw_license.lower() == "mit":
-            license_declared = "MIT"
-        else:
-            license_declared = raw_license
+        
+        # 🌟 pip show の結果に含まれる classifiers（複数行またはリスト）を取得する想定
+        # ※ pip show の出力仕様によっては、METADATAからの直接パース等で classifiers リストを取得できるように拡張するとより精度が上がります
+        classifiers = pkg.get("Classifiers", [])
+        if isinstance(classifiers, str):
+            classifiers = [c.strip() for c in classifiers.split(",")]
+
+        # ライセンスの正規化と LicenseRef の自動生成判定
+        license_declared = normalize_and_register_license(raw_license, classifiers, pkg["Name"], other_licenses_list)
 
         raw_author = pkg.get('Author', '').strip()
         external_supplier_prefix = "Organization"
         
-        if not raw_author:
+        if not raw_author or raw_author == "":
             raw_email = pkg.get('Author-email', '').strip()
             if raw_email and " <" in raw_email:
                 raw_author = raw_email.split(" <")[0]
@@ -444,7 +551,10 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg)
                             "relationshipType": "DEPENDS_ON",
                             "relatedSpdxElement": safe_child_id
                         })
-                
+    # 🌟 カスタムライセンス（LicenseRef）が生成されている場合、SPDXドキュメントに `otherLicenses` を追加
+    if other_licenses_list:
+        spdx_doc["hasExtractedLicensingInfos"] = other_licenses_list
+
     return spdx_doc
 
 # main関数はそのまま維持（変更ありません）
