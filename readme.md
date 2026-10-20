@@ -43,7 +43,7 @@ options:
   -d, --depth DEPTH     解析する依存関係の階層（デフォルト: "1", or "all"）
   -c, --config CONFIG   設定ファイル(sbom_config.txt)のパス
   -b, --binary BINARY   RootPackage対象のバイナリファイルパス（ハッシュ計算用）
-
+  --verbose             詳細なライセンス解析プロセスとソースを出力する
 ```
 
 ### 使用例:
@@ -83,3 +83,5 @@ SPDX-License-Identifier: Apache-2.0
 2026/7/11 ver 1.0
 2026/7/29 ver 1.1 importlib対応
 2026/10/16 ver 1.2 著作権情報(.dist-info/Author)の自動解析・フォールバック対応、対象.venvの自動検出・参照機能の追加
+2026/10/21 ver 1.3 SPDX Licenseへの簡易対応(定義内蔵)、hasExtractedLicensingInfos対応、テキストファイルのハッシュ値計算追加、--verbose の追加
+

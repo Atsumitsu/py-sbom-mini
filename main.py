@@ -31,6 +31,7 @@ KNOWN_SPDX_IDS = {
     "MPL-2.0", "PSF-2.0", "Zlib", "Unlicense"
 }
 
+
 def normalize_and_register_license_with_source(pkg, pkg_name, custom_licenses_list):
     """
     ライセンスの出所を追跡しながら、SPDXライセンス式をパース・正規化し、
@@ -39,20 +40,21 @@ def normalize_and_register_license_with_source(pkg, pkg_name, custom_licenses_li
     raw_license = None
     source_origin = "Unknown"
 
-    # 1. 優先度高: License-Expression (PEP 639 等)
+    # --- 1. 第1優先: License-Expression (PEP 639 等) ---
     if pkg.get("License-Expression"):
         raw_license = pkg.get("License-Expression")
         source_origin = "Metadata: License-Expression"
-    # 2. 従来型: License フィールド
-    elif pkg.get("License"):
+
+    # --- 2. 第2優先: License フィールド (ただし "UNKNOWN" や空でない場合) ---
+    if (not raw_license or raw_license.strip() == "" or raw_license.strip().upper() == "UNKNOWN") and pkg.get("License"):
         raw_license = pkg.get("License")
         source_origin = "Metadata: License Field"
-    
+
+    # --- 3. 第3優先: Classifiers からの逆引き (第1・第2が未設定/UNKNOWNの場合の補完) ---
     classifiers = pkg.get("Classifiers", [])
     if isinstance(classifiers, str):
         classifiers = [c.strip() for c in classifiers.split(",")]
 
-    # Classifier からの推論用
     inferred_from_clf = None
     for clf in classifiers:
         if "License :: OSI Approved ::" in clf:
@@ -60,13 +62,18 @@ def normalize_and_register_license_with_source(pkg, pkg_name, custom_licenses_li
             if "mit license" in clf_lower: inferred_from_clf = "MIT"; break
             elif "apache software license" in clf_lower or "apache-2.0" in clf_lower: inferred_from_clf = "Apache-2.0"; break
             elif "bsd license" in clf_lower:
-                inferred_from_clf = "BSD-3-Clause" if "3" in clf_lower else "BSD-2-Clause"
-                break
+                inferred_from_clf = "BSD-3-Clause" if "3" in clf_lower else "BSD-2-Clause"; break
+            elif "isc license" in clf_lower: inferred_from_clf = "ISC"; break
 
+    # もし第1・第2で有効なものが取れなかった（または UNKNOWN だった）場合、Classifiers の推論結果を採用する
+    if (not raw_license or raw_license.strip() == "" or raw_license.strip().upper() == "UNKNOWN") and inferred_from_clf:
+        return inferred_from_clf, "PyPI Classifiers (OSI Approved)"
+
+    # それでもダメな場合の最終フォールバック
     if not raw_license or raw_license.strip() == "" or raw_license.strip().upper() == "UNKNOWN":
-        if inferred_from_clf:
-            return inferred_from_clf, "PyPI Classifiers (OSI Approved)"
         return "NOASSERTION", "Fallback (NOASSERTION)"
+
+    location = pkg.get("Location") # 🌟 パッケージのインストール先パスを取得
 
     cleaned = raw_license.strip()
 
@@ -82,13 +89,56 @@ def normalize_and_register_license_with_source(pkg, pkg_name, custom_licenses_li
             normalized_tokens.append(stripped_token.upper() if stripped_token.lower() in ['and', 'or', 'with'] else stripped_token)
             continue
             
-        norm_sub = _normalize_single_license(stripped_token, inferred_from_clf, pkg_name, custom_licenses_list)
+        # 🌟 location を引数に渡す
+        norm_sub = _normalize_single_license(stripped_token, inferred_from_clf, pkg_name, location, custom_licenses_list)
         normalized_tokens.append(norm_sub)
         
     reconstructed_expression = " ".join(normalized_tokens)
     return reconstructed_expression, source_origin
 
-def _normalize_single_license(single_str, inferred_clf, pkg_name, custom_licenses_list):
+def extract_license_text_from_dist_info(location, pkg_name):
+    """
+    .dist-info 配下の LICENSE, LICENCE ファイル等からライセンス条文の本文を抽出する
+    """
+    if not location or not os.path.exists(location):
+        return None
+    
+    normalized_name = pkg_name.replace("-", "_").lower()
+    dist_info_path = None
+    
+    for entry in os.listdir(location):
+        if entry.lower().startswith(normalized_name) and entry.endswith(".dist-info"):
+            dist_info_path = os.path.join(location, entry)
+            break
+            
+    if not dist_info_path:
+        print(f"   [License File] ⚠️ {pkg_name}: .dist-info ディレクトリが見つかりませんでした (Location: {location})")
+        return None
+
+    # LICENSE または LICENCE で始まるファイルを優先的に探す
+    target_files = [f for f in os.listdir(dist_info_path) if f.upper().startswith(("LICENSE", "LICENCE", "COPYING"))]
+
+    for file_name in target_files:
+        file_path = os.path.join(dist_info_path, file_name)
+        if os.path.isfile(file_path):
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read().strip()
+                    if content:
+                        # 🌟 見つかって正常に読み込めた場合のメッセージとフルパス出力
+                        abs_file_path = os.path.abspath(file_path)
+                        print(f"   [License File] 📄 検出成功 [{pkg_name}]: ライセンスファイルを読み込みました -> {abs_file_path}")
+                        return content
+                    else:
+                        print(f"   [License File] ⚠️ {pkg_name}: ライセンスファイルは見つかりましたが、中身が空です: {file_path}")
+            except Exception as e:
+                # 🌟 ファイル読み込みに失敗した場合のメッセージ出力
+                print(f"   [License File] ❌ {pkg_name}: ライセンスファイルの読み込みに失敗しました ({file_path}): {e}")
+
+    print(f"   [License File] ℹ️ {pkg_name}: .dist-info 内に対象のライセンスファイルが見つかりませんでした。")
+    return None
+
+def _normalize_single_license(single_str, inferred_clf, pkg_name, location, custom_licenses_list):
     """ 単一のライセンス文字列（式の中のパーツ）を正規化するヘルパー """
     lower_s = single_str.lower()
     
@@ -101,8 +151,8 @@ def _normalize_single_license(single_str, inferred_clf, pkg_name, custom_license
     if "isc" in lower_s:
         return "ISC"
     #  ライセンス変換：救済
-    if "psfl" in lower_s:
-        return "PSF-2.0"
+#    if "psfl" in lower_s:
+#        return "PSF-2.0"
         
     if single_str in KNOWN_SPDX_IDS:
         return single_str
@@ -115,13 +165,20 @@ def _normalize_single_license(single_str, inferred_clf, pkg_name, custom_license
     safe_name = re.sub(r'[^a-zA-Z0-9-]', '-', f"-{single_str}").lower()
     license_ref = f"LicenseRef-{safe_name[:40]}" # 長くなりすぎないように制限
     
+# 🌟 1. まず .dist-info 内の LICENSE ファイルから実際の本文取得を試みる
+    extracted_text = extract_license_text_from_dist_info(location, pkg_name)
+    
+    # 2. ファイルが見つからない、または空の場合は、従来のメタデータ文字列をフォールバックとして使う
+    if not extracted_text:
+        extracted_text = single_str
+
     if not any(item.get("licenseId") == license_ref for item in custom_licenses_list):
         custom_licenses_list.append({
             "licenseId": license_ref,
-            "extractedText": single_str,
+            "extractedText": extracted_text, # 実ファイルの本文（またはメタデータの文字列）
             "name": f"{single_str}"
         })
-        
+
     return license_ref
 
 def parse_arguments():
@@ -191,17 +248,17 @@ def load_tag_value_config(config_path):
 
 def calculate_sha256(file_path):
     """ 指定されたバイナリファイルのSHA-256ハッシュ値を計算する """
-    if not os.path.exists(file_path):
+    if not os.path.exists(file_path) or not os.path.isfile(file_path):
         return None
     sha256_hash = hashlib.sha256()
     try:
         with open(file_path, "rb") as f:
-            print(f"   [バイナリファイル検出] {file_path} ")
+            print(f"   [ファイル検出] {file_path} ")
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
     except Exception:
-        print(f"   [バイナリファイル未検出] スキップ： {file_path} ")
+        print(f"   [ファイル未検出] スキップ： {file_path} ")
         return None
 
 def get_package_hash_from_record(location, name):
@@ -212,12 +269,25 @@ def get_package_hash_from_record(location, name):
         return None
         
     normalized_name = name.replace("-", "_").lower()
+    # 1. まず .dist-info/RECORD を探す
     for entry in os.listdir(location):
         if entry.lower().startswith(normalized_name) and entry.endswith(".dist-info"):
             record_path = os.path.join(location, entry, "RECORD")
             if os.path.exists(record_path):
                 # RECORDファイル自体のハッシュ値をパッケージの代表ハッシュとする（確実かつ高速）
                 return calculate_sha256(record_path)
+
+    # 2. RECORDが見つからない場合（ソースパッケージ等）、内部の .py ファイル等のハッシュをフォールバックとして計算
+    try:
+        for root, dirs, files in os.walk(location):
+            for file in files:
+                if file.endswith((".py", ".so", ".pyd", ".dll", ".txt")):
+                    file_path = os.path.join(root, file)
+                    h = calculate_sha256(file_path)
+                    if h: return h
+    except Exception:
+        pass
+
     return None
 
 def extract_copyright_from_dist_info(location, pkg_name):
@@ -369,7 +439,7 @@ def trace_dependencies_all(direct_modules, base_path):
     return collected_packages
 
 
-def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg, verbose =False):
+def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg, target_path=".", verbose=False):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     doc_uuid = str(uuid.uuid4())
     
@@ -422,23 +492,36 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg,
     print(f"   [Debug] 現在の作業ディレクトリ(CWD): {os.getcwd()}")
     print(f"   [Debug] 設定されたパス: {cfg.get('root_binary_path')}")
     print(f"   [Debug] 絶対パスに変換すると: {os.path.abspath(cfg.get('root_binary_path', ''))}")
-    # バイナリパスが設定されている場合の処理
-    if cfg.get("root_binary_path"):
-        if os.path.exists(cfg["root_binary_path"]):
-            binary_hash = calculate_sha256(cfg["root_binary_path"])
-            if binary_hash:
-                root_package["checksums"] = [
-                    {
-                        "algorithm": "SHA256",
-                        "checksumValue": binary_hash
-                    }
-                ]
-                print(f"   [Root Hash計算完了] {cfg['root_binary_path']} -> {binary_hash[:8]}...")
-            else:
-                print(f"   ⚠️ 警告: バイナリファイルのハッシュ計算に失敗しました: {cfg['root_binary_path']}")
+
+# 🌟 ルートパッケージのハッシュ計算（バイナリ未指定時はソースファイルを自動探索してハッシュ化）
+    target_hash_path = cfg.get("root_binary_path")
+    if not target_hash_path or not os.path.exists(target_hash_path):
+        # 指定がない場合、プロジェクト内の代表的なソースファイル（main.py や最初の .py）を探す
+        potential_main = os.path.join(target_path if 'target_path' in locals() else ".", "main.py")
+        if os.path.exists(potential_main):
+            target_hash_path = potential_main
         else:
-            # ファイルが見つからない場合の明示的なメッセージ
-            print(f"   ⚠️ 警告: 設定されたバイナリファイルが見つかりません: {cfg['root_binary_path']}")            
+            # 探索で見つかった最初の .py ファイルを利用
+            for root, dirs, files in os.walk(target_path if 'target_path' in locals() else "."):
+                py_candidates = [os.path.join(root, f) for f in files if f.endswith(".py") and f != "main.py"]
+                if py_candidates:
+                    target_hash_path = py_candidates[0]
+                    break
+
+    if target_hash_path and os.path.exists(target_hash_path):
+        file_hash = calculate_sha256(target_hash_path)
+        if file_hash:
+            root_package["checksums"] = [
+                {
+                    "algorithm": "SHA256",
+                    "checksumValue": file_hash
+                }
+            ]
+            print(f"   [Root Hash計算完了] 対象: {target_hash_path} -> {file_hash[:8]}...")
+        else:
+            print(f"   ⚠️ 警告: ファイルのハッシュ計算に失敗しました: {target_hash_path}")
+    else:
+        print(f"   ⚠️ 警告: ハッシュ対象となるファイル（バイナリまたはソースファイル）が見つかりません。")    
 
     # ルートパッケージ用のPURLを追加（設定にあれば）
     if cfg.get("root_purl"):
@@ -619,7 +702,7 @@ def main():
                 print(f"   [検出] {info['Name']} (v{info['Version']})")
             
     print(f"\n5. SPDX形式のSBOMを生成中...")
-    sbom_data = generate_spdx_json(args.version, valid_packages, direct_package_names, args.depth, cfg,verbose=args.verbose)
+    sbom_data = generate_spdx_json(args.version, valid_packages, direct_package_names, args.depth, cfg,target_path,verbose=args.verbose)
     
     output_path = args.output
     with open(output_path, "w", encoding="utf-8") as f:
