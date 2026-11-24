@@ -186,7 +186,7 @@ def parse_arguments():
         description="PythonプロジェクトからNTIA/CISA要件準拠のSPDX 2.3形式SBOMを自動生成するツール"
     )
     parser.add_argument("-p", "--path", default=".", help="解析対象のPythonプロジェクトのルート")
-    parser.add_argument("-v", "--version", default="1.0.0", help="プロジェクトのバージョン")
+    parser.add_argument("-v", "--version",required=True, help="プロジェクトのバージョン")
     parser.add_argument("-o", "--output", default="sbom.spdx.json", help="出力ファイル名")
     parser.add_argument("-d", "--depth", default="1", help="階層（'1' または 'all'）")
     parser.add_argument("-c", "--config", default="sbom_config.txt", help="設定ファイルのパス")
@@ -525,11 +525,20 @@ def generate_spdx_json(version, packages, direct_package_names, depth_mode, cfg,
 
     # ルートパッケージ用のPURLを追加（設定にあれば）
     if cfg.get("root_purl"):
+        root_purl = cfg["root_purl"]
+
+        if "{version}" not in root_purl:
+            raise ValueError(
+                "設定エラー: root_purl に '{version}' プレースホルダが含まれていません。"
+            )
+
+        root_purl = root_purl.replace("{version}", version)
+        
         root_package["externalRefs"] = [
             {
                 "referenceCategory": "PACKAGE-MANAGER",
                 "referenceType": "purl",
-                "referenceLocator": cfg["root_purl"]
+                "referenceLocator": root_purl
             }
         ]
         

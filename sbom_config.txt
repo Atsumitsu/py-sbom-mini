@@ -51,7 +51,7 @@ root_download_location: https://github.com/Atsumitsu/SBOMcraft
 root_binary_path: ..\SBOMcraft\dist\SBOMcraft\SBOMcraft.exe
 
 # 自作ツールのPURL（チェッカー対策）
-root_purl: pkg:generic/SBOMcraft@0.6.3.0
+root_purl: pkg:generic/SBOMcraft@{version}
 
 # [CISA 2025対応] SBOMの生成コンテキスト (Generation Context)
 # 一般的な値: Source (ソーススキャン), Build (ビルド時生成), Deployed (デプロイ環境スキャン)
