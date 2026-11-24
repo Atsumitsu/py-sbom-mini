@@ -38,7 +38,7 @@ usage: main.py [-h] [-p PATH] [-v VERSION] [-o OUTPUT] [-d DEPTH] [-c CONFIG] [-
 options:
   -h, --help            show this help message and exit
   -p, --path PATH       解析対象のPythonプロジェクトのルート (デフォルト: ".")
-  -v, --version VERSION プロジェクトのバージョン (デフォルト: "1.0.0")
+  -v, --version VERSION プロジェクトのバージョン (必須)
   -o, --output OUTPUT   出力ファイル名 (デフォルト: "sbom.spdx.json")
   -d, --depth DEPTH     解析する依存関係の階層（デフォルト: "1", or "all"）
   -c, --config CONFIG   設定ファイル(sbom_config.txt)のパス
@@ -72,6 +72,7 @@ root_license_declared: your license
 root_copyright_text: Copyright (c) year your name
 root_download_location: [https://github.com/your-org/my-app](https://github.com/your-org/my-app)
 generation_context: Source
+root_purl: pkg:xxx/name@{version} ※-vで指定した値が{version} に入ります
 
 ```
 
@@ -80,8 +81,9 @@ generation_context: Source
 SPDX-License-Identifier: Apache-2.0
 
 ## version
-2026/7/11 ver 1.0
-2026/7/29 ver 1.1 importlib対応
-2026/10/16 ver 1.2 著作権情報(.dist-info/Author)の自動解析・フォールバック対応、対象.venvの自動検出・参照機能の追加
-2026/10/21 ver 1.3 SPDX Licenseへの簡易対応(定義内蔵)、hasExtractedLicensingInfos対応、テキストファイルのハッシュ値計算追加、--verbose の追加
+- 2026/11/24 ver 1.4 version必須化
+- 2026/10/21 ver 1.3 SPDX Licenseへの簡易対応(定義内蔵)、hasExtractedLicensingInfos対応、テキストファイルのハッシュ値計算追加、--verbose の追加
+- 2026/10/16 ver 1.2 著作権情報(.dist-info/Author)の自動解析・フォールバック対応、対象.venvの自動検出・参照機能の追加
+- 2026/7/29 ver 1.1 importlib対応
+- 2026/7/11 ver 1.0
 
